@@ -10,11 +10,14 @@ import org.springframework.integration.annotation.Gateway
 import org.springframework.integration.annotation.MessagingGateway
 import org.springframework.integration.annotation.ServiceActivator
 import org.springframework.integration.config.EnableIntegration
+import org.springframework.integration.config.EnableMessageHistory
 import org.springframework.integration.dsl.IntegrationFlow
 import org.springframework.integration.dsl.MessageChannels
 import org.springframework.integration.dsl.Pollers
 import org.springframework.integration.dsl.PublishSubscribeChannelSpec
 import org.springframework.integration.dsl.integrationFlow
+import org.springframework.integration.transformer.support.HeaderValueMessageProcessor
+import org.springframework.messaging.Message
 import org.springframework.scheduling.annotation.EnableScheduling
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -22,6 +25,25 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
 private val logger = LoggerFactory.getLogger("soa.CronOddEvenDemo")
+
+/**
+ * Header Processor that implements the logic to generate a custom
+ * enrich header
+ */
+class ParityHeaderProcessor : HeaderValueMessageProcessor<String> {
+    /**
+     * The enrich header determines whether a number is even or odd
+     */ 
+    override fun processMessage(message: Message<*>): String {
+        val n = message.payload as Int
+        return if (n % 2 == 0) "even" else "odd"
+    }
+
+    /**
+     * Allow overwriting headers if needed
+     */ 
+    override fun isOverwrite(): Boolean = true
+}
 
 /**
  * Spring Integration configuration for demonstrating Enterprise Integration Patterns.
@@ -37,6 +59,7 @@ private val logger = LoggerFactory.getLogger("soa.CronOddEvenDemo")
 class IntegrationApplication(
     private val sendNumber: SendNumber,
 ) {
+
     /**
      * Creates an atomic integer source that generates sequential numbers.
      */
@@ -49,7 +72,7 @@ class IntegrationApplication(
      */
     @Bean
     fun oddChannel(): PublishSubscribeChannelSpec<*> = MessageChannels.publishSubscribe()
-
+    
     /**
      * Main integration flow that polls the integer source and routes messages.
      * Polls every 100ms and routes based on even/odd logic.
@@ -64,9 +87,7 @@ class IntegrationApplication(
                 logger.info("📥 Source generated number: {}", num)
                 num
             }
-            route { p: Int ->
-                "numberChannel"
-            }
+            channel("numberChannel")
         }
 
     /**
@@ -76,9 +97,12 @@ class IntegrationApplication(
     @Bean
     fun numberFlow(integerSource: AtomicInteger): IntegrationFlow =
         integrationFlow("numberChannel") {
+            enrichHeaders {
+                header("parity", ParityHeaderProcessor())
+            }
             route { p: Int ->
                 val channel = if (p % 2 == 0) "evenChannel" else "oddChannel"
-                logger.info("🔀 Router: {} → {}", p, channel)
+                logger.info("  🔀 Router: {} → {}", p, channel)
                 channel
             }
         }
@@ -96,6 +120,7 @@ class IntegrationApplication(
             }
             handle { p ->
                 logger.info("  ✅ Odd Handler: Processed [{}]", p.payload)
+                logger.info("  🏷️  Odd Handler: Enriched Headers [{}]", p.headers["parity"])
             }
         }
 
@@ -113,6 +138,7 @@ class IntegrationApplication(
             }
             handle { p ->
                 logger.info("  ✅ Even Handler: Processed [{}]", p.payload)
+                logger.info("  🏷️  Even Handler: Enriched Headers [{}]", p.headers["parity"])
             }
         }
 
