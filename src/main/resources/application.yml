@@ -1,6 +1,10 @@
 spring:
   application:
     name: lab5-soa-integration
+  integration:
+    message:
+      history:
+        enabled: true
 
 logging:
   level:

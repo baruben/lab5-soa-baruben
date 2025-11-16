@@ -46,6 +46,26 @@ class ParityHeaderProcessor : HeaderValueMessageProcessor<String> {
 }
 
 /**
+ * Logs the component history through which a message has passed
+ */
+fun logHistory(msg: Message<*>) {
+    val where = msg.headers["where"] as String
+    val history = msg.headers["history"] as List<*>
+    var lastComponent = ""
+
+    logger.info("  📜 ${where}: History {")    
+    history.forEach {
+        val component = it.toString().substringBefore("#").substringBefore(".").substringAfter("name=").substringBefore(",")
+        if (component != lastComponent && component != "tapChannel") {
+            logger.info("        Visited: {}", component)
+            lastComponent = component
+        }
+        
+    }
+    logger.info("  }")
+}
+
+/**
  * Spring Integration configuration for demonstrating Enterprise Integration Patterns.
  * This application implements a message flow that processes numbers and routes them
  * based on whether they are even or odd.
@@ -55,6 +75,7 @@ class ParityHeaderProcessor : HeaderValueMessageProcessor<String> {
  */
 @SpringBootApplication
 @EnableIntegration
+@EnableMessageHistory
 @EnableScheduling
 class IntegrationApplication(
     private val sendNumber: SendNumber,
@@ -83,10 +104,14 @@ class IntegrationApplication(
             source = { integerSource.getAndIncrement() },
             options = { poller(Pollers.fixedRate(100)) },
         ) {
+            enrichHeaders {
+                header("where", "Source Flow")
+            }
             transform { num: Int ->
                 logger.info("📥 Source generated number: {}", num)
                 num
             }
+            wireTap("tapChannel")
             channel("numberChannel")
         }
 
@@ -99,7 +124,9 @@ class IntegrationApplication(
         integrationFlow("numberChannel") {
             enrichHeaders {
                 header("parity", ParityHeaderProcessor())
+                header("where", "Number Flow", true)
             }
+            wireTap("tapChannel")
             route { p: Int ->
                 val channel = if (p % 2 == 0) "evenChannel" else "oddChannel"
                 logger.info("  🔀 Router: {} → {}", p, channel)
@@ -114,6 +141,10 @@ class IntegrationApplication(
     @Bean
     fun oddFlow(): IntegrationFlow =
         integrationFlow("oddChannel") {
+            enrichHeaders {
+                header("where", "Odd Flow", true)
+            }
+            wireTap("tapChannel")
             transform { obj: Int ->
                 logger.info("  ⚙️  Odd Transformer: {} → 'Number {}'", obj, obj)
                 "Number $obj"
@@ -132,6 +163,10 @@ class IntegrationApplication(
     @Bean
     fun evenFlow(): IntegrationFlow =
         integrationFlow("evenChannel") {
+            enrichHeaders {
+                header("where", "Even Flow", true)
+            }
+            wireTap("tapChannel")
             transform { obj: Int ->
                 logger.info("  ⚙️  Even Transformer: {} → 'Number {}'", obj, obj)
                 "Number $obj"
@@ -141,6 +176,16 @@ class IntegrationApplication(
                 logger.info("  🏷️  Even Handler: Enriched Headers [{}]", p.headers["parity"])
             }
         }
+
+    /**
+     * Integration flow for Wire Tap.
+     */
+    @Bean
+    fun tapFlow() = integrationFlow("tapChannel") {
+        handle { p -> 
+            logHistory(p) 
+        }
+    }
 
     /**
      * Scheduled task that periodically sends negative random numbers via the gateway.
